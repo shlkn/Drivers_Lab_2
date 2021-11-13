@@ -8,7 +8,7 @@ all:
 
 
 clean:
-	rm -rf lab2 *.o *.ko *.mod *.dwo *.mod.c Module.symvers modules.order
+	rm -rf lab2 *.o *.ko *.mod *.dwo *.mod.c Module.symvers modules.order prog1
 check:
 	cppcheck --enable=all --inconclusive --library=posix lab2.c
 	$(KDIR)/scripts/checkpatch.pl -f lab2.c
@@ -19,3 +19,6 @@ rm:
 reload:
 	sudo rmmod lab2.ko
 	sudo insmod lab2.ko
+us:
+	gcc program1.c -o prog1
+

@@ -12,7 +12,11 @@ static char buffer[200];
 static ssize_t lab2_read(struct file *file, char __user *buf,
 			 size_t count, loff_t *pos)
 {
-	return simple_read_from_buffer(buf, count, pos, buffer, 200);
+	ssize_t cnt_byte = 0;
+	int i = 0;
+	cnt_byte = simple_read_from_buffer(buf, count, pos, buffer, 200);
+	printk("%c", buffer[i]);
+	return cnt_byte;
 }
 
 static ssize_t lab2_write(struct file *file, const char __user *buf,
@@ -28,13 +32,13 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 
 int lab2_open(struct inode *in, struct file *fl)
 {
-	printk("file opened");
+	printk("file opened\n");
 	return 0;
 }
 
 int lab2_release(struct inode *in, struct file *fl)
 {
-	printk("file closed");
+	printk("file closed\n");
 	return 0;
 }
 
@@ -49,7 +53,7 @@ static struct file_operations fops = {
 static int __init modinit(void)
 {
 	/* 0 is ? */
-	major = register_chrdev(0, "register_chrdev", &fops);
+	major = register_chrdev(0, "Lab2", &fops);
 	if (major < 0) {
 		printk("failed to register_chrdev failed with %d\n", major);
 		/* should follow 0/-E convention ... */
@@ -63,6 +67,7 @@ static int __init modinit(void)
 static void __exit modexit(void)
 {
 	unregister_chrdev(major, "register_chrdev");
+	printk("bye");
 }
 
 
