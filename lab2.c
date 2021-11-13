@@ -12,10 +12,10 @@ static char buffer[200];
 static ssize_t lab2_read(struct file *file, char __user *buf,
 			 size_t count, loff_t *pos)
 {
+	//int i = 0;
 	ssize_t cnt_byte = 0;
-	int i = 0;
 	cnt_byte = simple_read_from_buffer(buf, count, pos, buffer, 200);
-	printk("%c", buffer[i]);
+	printk("%s\n", buffer);
 	return cnt_byte;
 }
 
