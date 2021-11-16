@@ -12,20 +12,35 @@ static char buffer[200];
 static ssize_t lab2_read(struct file *file, char __user *buf,
 			 size_t count, loff_t *pos)
 {
-	//int i = 0;
 	ssize_t cnt_byte = 0;
-	cnt_byte = simple_read_from_buffer(buf, count, pos, buffer, 200);
-	printk("%s\n", buffer);
+	int i = 0;
+	printk("in read function");
+	while(buffer[i] != '\0')
+	{
+		printk("%c", buffer[i]);
+		i++;
+	}
+	printk("%ld\n", count);
+	if(copy_to_user(buf, buffer, count))
+	{
+		printk("copy_to_user error");
+		return -EFAULT;
+	}
 	return cnt_byte;
 }
 
 static ssize_t lab2_write(struct file *file, const char __user *buf,
 			 size_t count, loff_t *pos)
 {
+	printk("in write function");
 	if (count > sizeof(buffer)-1)
 		return -EINVAL;
 	if (copy_from_user(buffer, buf, count))
+	{
+		printk("copy_from_user error");
 		return -EFAULT;
+	}
+	printk("%s", buffer);
 	buffer[count] = '\0';
 	return count;
 }
