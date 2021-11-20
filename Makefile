@@ -1,6 +1,6 @@
 obj-m := lab2.o
 
-KDIR := /home/iliyash/kernel_src/linux
+KDIR := /home/iliyash/Kernel_src/linux
 
 all:
 	$(MAKE) -C $(KDIR) M=$$PWD 
@@ -23,6 +23,7 @@ reload:
 	$(MAKE) -C $(KDIR) M=$$PWD 
 	sudo rmmod lab2.ko
 	sudo insmod lab2.ko
+	sudo dmesg -c
 us:
 	gcc write.c -o write
 	gcc read.c -o read

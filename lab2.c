@@ -6,7 +6,7 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/wait.h>
-#define BUFFER_SIZE 10
+#define BUFFER_SIZE 15
 
 DECLARE_WAIT_QUEUE_HEAD(module_queue);
 
@@ -15,11 +15,11 @@ struct cycle_buffer {
 	int buf_size;
 	int read_ptr;
 	int write_ptr;
-	int bytes_avalible;
+	ssize_t bytes_avalible;
 };
 
-void  write_in_cycle_buffer(struct cycle_buffer *buf, int count, char *data);
-char *read_from_cycle_buffer(struct cycle_buffer *buf, int count);
+int write_in_cycle_buffer(struct cycle_buffer *buf, int count, char *data);
+void read_from_cycle_buffer(struct cycle_buffer *buf, int count, char *read_data, ssize_t offset);
 int readble_count_of_bytes_in_cycle_buffer(struct cycle_buffer buf);
 
 struct cycle_buffer test_buffer;
@@ -32,31 +32,34 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 	ssize_t cnt = 0;
 	int read_bytes_avail = 0;
 	char *read_data;
-	read_data = kzalloc(count, GFP_KERNEL);
+	read_data = kzalloc(count + 1, GFP_KERNEL);
 	printk("in read function");
 	read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(test_buffer);
 	if (read_bytes_avail == 0)
 		return 0;
-	if(read_bytes_avail >= count)
-		read_data = read_from_cycle_buffer(&test_buffer, count);
+	if(read_bytes_avail >= count)//
+		read_from_cycle_buffer(&test_buffer, count, read_data, count);
 	else {
-		int already_readen_count = -1;
-		while(already_readen_count != count) {
+		int already_read_count = 0;
+		while(true) {
 			char *data;
-			int i;
-			if (already_readen_count - count < readble_count_of_bytes_in_cycle_buffer(test_buffer)) {
-				data = read_from_cycle_buffer(&test_buffer, already_readen_count - count);
-			}
-			data = read_from_cycle_buffer(&test_buffer, read_bytes_avail);
-			for(i = 0;i < already_readen_count + read_bytes_avail; i++) {
-				read_data[already_readen_count++] = data[i];
-			}
-			already_readen_count += read_bytes_avail;
-			count -= read_bytes_avail;
+			int i, data_ptr;
 			read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(test_buffer);
+			if (count - already_read_count <= read_bytes_avail) {
+				read_from_cycle_buffer(&test_buffer, count - already_read_count, read_data, already_read_count);
+				wake_up(&module_queue);
+				data_ptr = -1;
+				cnt = i;
+				break;
+			}
+			else {
+				read_from_cycle_buffer(&test_buffer, read_bytes_avail, read_data, already_read_count);
+				already_read_count += read_bytes_avail;
+			}
 			kfree(data);
 			wake_up(&module_queue);
-			wait_event_interruptible_exclusive(module_queue, readble_count_of_bytes_in_cycle_buffer(test_buffer) > 0);
+			if(wait_event_interruptible_exclusive(module_queue, (readble_count_of_bytes_in_cycle_buffer(test_buffer) > 0)) == -ERESTARTSYS)
+				break;
 		}
 	}
 
@@ -72,34 +75,34 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 			 size_t count, loff_t *pos)
 {
 	char *data;
-	int i;
 
-	printk("in write function");
 	data = kzalloc(count, GFP_KERNEL);
 	if (copy_from_user(data, buf, count)) {
 		printk("copy_from_user error");
 		return -EFAULT;
 	}
 
-
-	if(test_buffer.bytes_avalible > count)
+	//printk("test_buffer.bytes_avalible > count %d %d\n",test_buffer.bytes_avalible, count);
+	if(test_buffer.bytes_avalible >= count)
 		write_in_cycle_buffer(&test_buffer, count, data);
 	else {
-		int already_writen_count = 0;
-		while(count != already_writen_count) {
-			if (count - already_writen_count < test_buffer.bytes_avalible){
-				write_in_cycle_buffer(&test_buffer, count - already_writen_count, data + already_writen_count);
+		int already_written_count = 0;
+		while(true) {
+			if (count - already_written_count <= test_buffer.bytes_avalible){
+				write_in_cycle_buffer(&test_buffer, count - already_written_count, (data + already_written_count));
+				wake_up(&module_queue);
+				break;
 			}
-			write_in_cycle_buffer(&test_buffer, test_buffer.bytes_avalible, data + already_writen_count);
-			already_writen_count += test_buffer.bytes_avalible;
+			else {
+				already_written_count = write_in_cycle_buffer(&test_buffer, test_buffer.bytes_avalible, (data + already_written_count));
+			}
 			wake_up(&module_queue);
-			wait_event_interruptible_exclusive(module_queue, test_buffer.bytes_avalible > 0);
+			if(wait_event_interruptible_exclusive(module_queue, (test_buffer.bytes_avalible > 0)) == -ERESTARTSYS)
+			{
+				break;
+			}
 		}
 	}
-
-
-	for(i = 0; i < test_buffer.buf_size; i++)
-		printk("%X", test_buffer.buffer[i]);
 	//buffer[count] = '\0';
 	kfree(data);
 	return count;
@@ -128,8 +131,12 @@ static struct file_operations fops = {
 static int __init modinit(void)
 {
 	/* 0 is ? */
+	//init
 	test_buffer.buf_size = BUFFER_SIZE;
 	test_buffer.bytes_avalible = test_buffer.buf_size;
+	test_buffer.write_ptr = 0;
+	test_buffer.read_ptr = 0;
+
 	major = register_chrdev(0, "Lab2", &fops);
 	if (major < 0) {
 		printk("failed to register_chrdev failed with %d\n", major);
@@ -157,35 +164,50 @@ int readble_count_of_bytes_in_cycle_buffer(struct cycle_buffer buf)
 	return bytes_count;
 }
 
-char *read_from_cycle_buffer(struct cycle_buffer *buf, int count)
+void read_from_cycle_buffer(struct cycle_buffer *buf, int count, char *read_data, ssize_t offset)
 {
 	int read_cnt;
-	char *data;
 
-	data = kzalloc(count, GFP_KERNEL);
-	if (data == NULL)
-		return NULL;
 	for (read_cnt = 0; read_cnt < count; read_cnt++) {
-		if (buf->read_ptr == buf->buf_size)
+		if (buf->read_ptr == buf->buf_size - 1)
+		{
+			read_data[offset] = buf->buffer[buf->read_ptr];
 			buf->read_ptr = 0;
-		data[read_cnt] = buf->buffer[buf->read_ptr];
-		buf->read_ptr++;
+			offset++;
+		}
+		else{
+			read_data[offset] = buf->buffer[buf->read_ptr];
+			buf->read_ptr++;
+			offset++;
+		}
 		buf->bytes_avalible++;
 	}
-	return data;
 }
 
-void  write_in_cycle_buffer(struct cycle_buffer *buf, int count, char *data)
+int write_in_cycle_buffer(struct cycle_buffer *buf, int count, char *data)
 {
 	int write_cnt;
 
+	//printk("count bytes to write %d\n", count);
+	//printk("write in buffer\n count - %d\n data - %s", count, data);
+	//printk("write_ptr - %d", buf->write_ptr);
 	for (write_cnt = 0; write_cnt < count; write_cnt++) {
-		if (buf->write_ptr == buf->buf_size)
+		if (buf->write_ptr == buf->buf_size - 1)
+		{
+			buf->buffer[buf->write_ptr] = data[write_cnt];
+			//printk("write byte - %X with index %d", buf->buffer[buf->write_ptr], buf->write_ptr);
 			buf->write_ptr = 0;
-		buf->buffer[buf->write_ptr] = data[write_cnt];
-		buf->write_ptr++;
+		}
+		else {
+			buf->buffer[buf->write_ptr] = data[write_cnt];
+			//printk("write byte - %X with index %d", buf->buffer[buf->write_ptr], buf->write_ptr);
+			buf->write_ptr++;
+		}
 		buf->bytes_avalible--;
 	}
+	//printk("avail %d\n", buf->bytes_avalible);
+	//printk("write ptr %d\n", buf->write_ptr);
+	return write_cnt;
 }
 
 
