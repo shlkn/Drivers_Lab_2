@@ -6,7 +6,7 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/wait.h>
-#define BUFFER_SIZE 15
+#define BUFFER_SIZE 5
 
 DECLARE_WAIT_QUEUE_HEAD(module_queue);
 
@@ -16,7 +16,7 @@ struct cycle_buffer {
 	int read_ptr;
 	int write_ptr;
 	ssize_t bytes_avalible;
-};
+}; 
 
 int write_in_cycle_buffer(struct cycle_buffer *buf, int count, char *data);
 void read_from_cycle_buffer(struct cycle_buffer *buf, int count, char *read_data, ssize_t offset);
@@ -38,7 +38,7 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 	if (read_bytes_avail == 0)
 		return 0;
 	if(read_bytes_avail >= count)//
-		read_from_cycle_buffer(&test_buffer, count, read_data, count);
+		read_from_cycle_buffer(&test_buffer, count, read_data, 0);
 	else {
 		int already_read_count = 0;
 		while(true) {
@@ -68,7 +68,7 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		return -EFAULT;
 	}
 	kfree(read_data);
-	return cnt;
+	return count;
 }
 
 static ssize_t lab2_write(struct file *file, const char __user *buf,
@@ -81,8 +81,6 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 		printk("copy_from_user error");
 		return -EFAULT;
 	}
-
-	//printk("test_buffer.bytes_avalible > count %d %d\n",test_buffer.bytes_avalible, count);
 	if(test_buffer.bytes_avalible >= count)
 		write_in_cycle_buffer(&test_buffer, count, data);
 	else {
@@ -94,7 +92,9 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 				break;
 			}
 			else {
-				already_written_count = write_in_cycle_buffer(&test_buffer, test_buffer.bytes_avalible, (data + already_written_count));
+				printk("already_written_count before - %d", already_written_count);
+				already_written_count += write_in_cycle_buffer(&test_buffer, test_buffer.bytes_avalible, (data + already_written_count));
+				printk("already_written_count after - %d", already_written_count);
 			}
 			wake_up(&module_queue);
 			if(wait_event_interruptible_exclusive(module_queue, (test_buffer.bytes_avalible > 0)) == -ERESTARTSYS)
@@ -103,7 +103,6 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 			}
 		}
 	}
-	//buffer[count] = '\0';
 	kfree(data);
 	return count;
 }
@@ -187,26 +186,18 @@ void read_from_cycle_buffer(struct cycle_buffer *buf, int count, char *read_data
 int write_in_cycle_buffer(struct cycle_buffer *buf, int count, char *data)
 {
 	int write_cnt;
-
-	//printk("count bytes to write %d\n", count);
-	//printk("write in buffer\n count - %d\n data - %s", count, data);
-	//printk("write_ptr - %d", buf->write_ptr);
 	for (write_cnt = 0; write_cnt < count; write_cnt++) {
 		if (buf->write_ptr == buf->buf_size - 1)
 		{
 			buf->buffer[buf->write_ptr] = data[write_cnt];
-			//printk("write byte - %X with index %d", buf->buffer[buf->write_ptr], buf->write_ptr);
 			buf->write_ptr = 0;
 		}
 		else {
 			buf->buffer[buf->write_ptr] = data[write_cnt];
-			//printk("write byte - %X with index %d", buf->buffer[buf->write_ptr], buf->write_ptr);
 			buf->write_ptr++;
 		}
 		buf->bytes_avalible--;
 	}
-	//printk("avail %d\n", buf->bytes_avalible);
-	//printk("write ptr %d\n", buf->write_ptr);
 	return write_cnt;
 }
 
