@@ -6,12 +6,15 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/wait.h>
+#include <uapi/asm-generic/ioctl.h>
+#include "lab2.h"
+
 #define BUFFER_SIZE 5
 
 static int major;
 
-struct cycle_buffer **sesions;
-int count_of_sesions;
+struct cycle_buffer **sessions;
+int count_of_sessions;
 
 struct cycle_buffer {
 	kgid_t  user_group; 
@@ -36,18 +39,18 @@ int find_sesion(kgid_t group, struct file *fl)
 {
 	int i, res;
 
-	for (i = 0; i < count_of_sesions; i++)
+	for (i = 0; i < count_of_sessions; i++)
 	{
-		res = gid_cmp((void *) &sesions[i]->user_group, (void *) &group);
+		res = gid_cmp((void *) &sessions[i]->user_group, (void *) &group);
 		//printk("%d res - ", res);
 		if(fl->f_mode & FMODE_READ) {
-			if(sesions[i]->reader_pid == -1 && res == 0) {
-				sesions[i]->reader_pid = current->pid;
+			if(sessions[i]->reader_pid == -1 && res == 0) {
+				sessions[i]->reader_pid = current->pid;
 				return i;
 			}
 		}else if(fl->f_mode & FMODE_WRITE) {
-			if(sesions[i]->writer_pid == -1 && res == 0) {
-				sesions[i]->writer_pid = current->pid;
+			if(sessions[i]->writer_pid == -1 && res == 0) {
+				sessions[i]->writer_pid = current->pid;
 				return i;
 			}
 		} else {
@@ -60,40 +63,40 @@ void add_new_session(struct file *fl, int pid)
 {
 	struct cycle_buffer **temp;
 
-	count_of_sesions++;
-	temp = krealloc(sesions, count_of_sesions * sizeof(struct cycle_buffer *), GFP_KERNEL);
+	count_of_sessions++;
+	temp = krealloc(sessions, count_of_sessions * sizeof(struct cycle_buffer *), GFP_KERNEL);
 	if(temp == NULL) {
 		pr_alert("Can`t allocate memory");
 	}
 
-	temp[count_of_sesions - 1] = krealloc((sesions + count_of_sesions - 1), sizeof(struct cycle_buffer), GFP_KERNEL);
-	if(temp[count_of_sesions - 1] == NULL) {
+	temp[count_of_sessions - 1] = krealloc((sessions + count_of_sessions - 1), sizeof(struct cycle_buffer), GFP_KERNEL);
+	if(temp[count_of_sessions - 1] == NULL) {
 		pr_alert("Can`t allocate memory");
 	}
-	temp[count_of_sesions - 1]->buffer = krealloc(temp[count_of_sesions - 1]->buffer, BUFFER_SIZE, GFP_KERNEL);
-	if(temp[count_of_sesions - 1]->buffer == NULL) {
+	temp[count_of_sessions - 1]->buffer = krealloc(temp[count_of_sessions - 1]->buffer, BUFFER_SIZE, GFP_KERNEL);
+	if(temp[count_of_sessions - 1]->buffer == NULL) {
 		pr_alert("Can`t allocate memory");
 	}
 
-	sesions = temp;
+	sessions = temp;
 
 
 	//init mem
-	sesions[count_of_sesions - 1]->user_group = fl->f_cred->group_info->gid[0];
+	sessions[count_of_sessions - 1]->user_group = fl->f_cred->group_info->gid[0];
 	if(fl->f_mode & FMODE_WRITE) {
-		sesions[count_of_sesions - 1]->writer_pid = pid;
-		sesions[count_of_sesions - 1]->reader_pid = -1;
+		sessions[count_of_sessions - 1]->writer_pid = pid;
+		sessions[count_of_sessions - 1]->reader_pid = -1;
 	}
 	if(fl->f_mode & FMODE_READ) {
-		sesions[count_of_sesions - 1]->reader_pid = pid;
-		sesions[count_of_sesions - 1]->writer_pid = -1;
+		sessions[count_of_sessions - 1]->reader_pid = pid;
+		sessions[count_of_sessions - 1]->writer_pid = -1;
 	}
-	sesions[count_of_sesions - 1]->buf_size = BUFFER_SIZE;
-	sesions[count_of_sesions - 1]->read_ptr = 0;
-	sesions[count_of_sesions - 1]->write_ptr = 0;
-	sesions[count_of_sesions - 1]->bytes_avalible = BUFFER_SIZE;
-	mutex_init(&sesions[count_of_sesions - 1]->gate);
-	init_waitqueue_head(&sesions[count_of_sesions - 1]->queue);
+	sessions[count_of_sessions - 1]->buf_size = BUFFER_SIZE;
+	sessions[count_of_sessions - 1]->read_ptr = 0;
+	sessions[count_of_sessions - 1]->write_ptr = 0;
+	sessions[count_of_sessions - 1]->bytes_avalible = BUFFER_SIZE;
+	mutex_init(&sessions[count_of_sessions - 1]->gate);
+	init_waitqueue_head(&sessions[count_of_sessions - 1]->queue);
 }
 int readble_count_of_bytes_in_cycle_buffer(struct cycle_buffer *buf)
 {
@@ -146,34 +149,37 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 	char *read_data;
 
 	read_data = kzalloc(count + 1, GFP_KERNEL);
-	for(iter = 0; iter < count_of_sesions; iter++) { //finds sesion
-		if(sesions[iter]->reader_pid == current->pid)
+	for(iter = 0; iter < count_of_sessions; iter++) { //finds sesion
+		if(sessions[iter]->reader_pid == current->pid)
 			break;
 	}
 
-	//mutex_lock(&mutex);
-	read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sesions[iter]);
+	if(mutex_lock_interruptible(&sessions[iter]->gate)) {
+		pr_alert("mutex interrupt");
+		return -1;
+	}
+	read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sessions[iter]);
 	// if (read_bytes_avail == 0)
 	// 	return 0;
 	if (read_bytes_avail >= count)
-		read_from_cycle_buffer(sesions[iter], count, read_data, 0);
+		read_from_cycle_buffer(sessions[iter], count, read_data, 0);
 	else {
 		int already_read_count = 0;
 
 		while (true) {
-			read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sesions[iter]);
+			read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sessions[iter]);
 			if (count - already_read_count > read_bytes_avail) {
-				read_from_cycle_buffer(sesions[iter], read_bytes_avail, read_data, already_read_count);
+				read_from_cycle_buffer(sessions[iter], read_bytes_avail, read_data, already_read_count);
 				already_read_count += read_bytes_avail;
 			} else {
-				read_from_cycle_buffer(sesions[iter], count - already_read_count, read_data, already_read_count);
-				wake_up(&sesions[iter]->queue);
+				read_from_cycle_buffer(sessions[iter], count - already_read_count, read_data, already_read_count);
+				wake_up(&sessions[iter]->queue);
 				break;
 			}
 
-			mutex_unlock(&sesions[iter]->gate);
-			wake_up(&sesions[iter]->queue);
-			if (wait_event_interruptible_exclusive(sesions[iter]->queue, (readble_count_of_bytes_in_cycle_buffer(sesions[iter]) > 0)) == -ERESTARTSYS)
+			mutex_unlock(&sessions[iter]->gate);
+			wake_up(&sessions[iter]->queue);
+			if (wait_event_interruptible_exclusive(sessions[iter]->queue, (readble_count_of_bytes_in_cycle_buffer(sessions[iter]) > 0)) == -ERESTARTSYS)
 				break;
 		}
 	}
@@ -198,29 +204,32 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 		return -EFAULT;
 	}
 
-	for(iter = 0; iter < count_of_sesions; iter++) { //finds sesion
-		if(sesions[iter]->writer_pid == current->pid)
+	for(iter = 0; iter < count_of_sessions; iter++) { //finds sesion
+		if(sessions[iter]->writer_pid == current->pid)
 			break;
 	}
 
-	//mutex_lock(&mutex);
-	if (sesions[iter]->bytes_avalible >= count)
-		write_in_cycle_buffer(sesions[iter], count, data);
+	if(mutex_lock_interruptible(&sessions[iter]->gate)) {
+		pr_alert("mutex interrupt");
+		return -1;
+	}
+	if (sessions[iter]->bytes_avalible >= count)
+		write_in_cycle_buffer(sessions[iter], count, data);
 	else {
 		int already_written_count = 0;
 
 		while (true) {
-			if (count - already_written_count > sesions[iter]->bytes_avalible)
-				already_written_count += write_in_cycle_buffer(sesions[iter], sesions[iter]->bytes_avalible, (data + already_written_count));
+			if (count - already_written_count > sessions[iter]->bytes_avalible)
+				already_written_count += write_in_cycle_buffer(sessions[iter], sessions[iter]->bytes_avalible, (data + already_written_count));
 			else {
-				write_in_cycle_buffer(sesions[iter], count - already_written_count, (data + already_written_count));
-				wake_up(&sesions[iter]->queue);
+				write_in_cycle_buffer(sessions[iter], count - already_written_count, (data + already_written_count));
+				wake_up(&sessions[iter]->queue);
 				break;
 			}
 
-			mutex_unlock(&sesions[iter]->gate);
-			wake_up(&sesions[iter]->queue);
-			if (wait_event_interruptible_exclusive(sesions[iter]->queue, (sesions[iter]->bytes_avalible > 0)) == -ERESTARTSYS)
+			mutex_unlock(&sessions[iter]->gate);
+			wake_up(&sessions[iter]->queue);
+			if (wait_event_interruptible_exclusive(sessions[iter]->queue, (sessions[iter]->bytes_avalible > 0)) == -ERESTARTSYS)
 				break;
 		}
 	}
@@ -237,12 +246,8 @@ int lab2_open(struct inode *in, struct file *fl)
 
 
 	sesionID = find_sesion(fl->f_cred->group_info->gid[0], fl);
-	if(sesionID == -1) {
+	if(sesionID == -1)
 		add_new_session(fl, current->pid);
-		// pr_alert("%d", sesions[count_of_sesions - 1]->user_group);
-		// pr_alert("%d", sesions[count_of_sesions - 1]->writer_pid);
-	}
-	pr_alert("%d", sesionID);
 	pr_alert("file opened\n");
 	return 0;
 }
@@ -253,18 +258,62 @@ int lab2_release(struct inode *in, struct file *fl)
 	return 0;
 }
 
+static long lab2_ioctl_handler(struct file *fl, unsigned int cmd, unsigned long arg)
+{
+	char *temp;
+
+	if(arg < 1) {
+		pr_alert("Received wrong argument! No futher actions");
+		return -EINVAL;
+	}
+
+	switch(cmd){
+		case CH_BUF_SIZE: {
+			int i = 0;
+
+			for(i = 0; i < count_of_sessions; i++) {
+				if(sessions[i]->writer_pid == current->pid || sessions[i]->reader_pid == current->pid) {
+					if(mutex_lock_interruptible(&sessions[i]->gate)) {
+						pr_alert("mutex interrupt");
+						return -1;
+					}
+					if(sessions[i]->bytes_avalible != sessions[i]->buf_size) {
+						pr_alert("Buffer contains data. No futher actions");
+						mutex_unlock(&sessions[i]->gate);
+						return -EINVAL;
+					}
+					temp = krealloc(sessions[i]->buffer, arg, GFP_KERNEL);
+					if(temp == NULL) {
+						pr_alert("Error in memory allocate.");
+						mutex_unlock(&sessions[i]->gate);
+						return -EINVAL;
+					}
+					sessions[i]->buffer = temp;
+					mutex_unlock(&sessions[i]->gate);
+				}
+			}
+			break;
+		}
+		default: {
+			pr_alert("Received wrong cmd! No futher actions");
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 static const struct file_operations fops = {
 	.read	= lab2_read,
 	.write	= lab2_write,
 	.open = lab2_open,
 	.release = lab2_release,
+	.unlocked_ioctl = lab2_ioctl_handler,
 };
-
 
 static int __init modinit(void)
 {
-	count_of_sesions = 0;
-	sesions = NULL;
+	count_of_sessions = 0;
+	sessions = NULL;
 
 	major = register_chrdev(0, "Lab2", &fops);
 	if (major < 0) {

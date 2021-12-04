@@ -1,8 +1,10 @@
 #include <stdio.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "lab2.h"
 
 
 int main()
@@ -12,6 +14,7 @@ int main()
 	//for(int i = 0; i < 20; i++)
 		//printf("%X\n", temp[i]);
 	printf("%s\n", temp);
+	ioctl(file, CH_BUF_SIZE, 10);
 	write(file, temp, 20);
 	close(file);
 	return 0;
