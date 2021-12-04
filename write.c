@@ -14,8 +14,9 @@ int main()
 	//for(int i = 0; i < 20; i++)
 		//printf("%X\n", temp[i]);
 	printf("%s\n", temp);
-	ioctl(file, CH_BUF_SIZE, 10);
-	write(file, temp, 20);
+	//ioctl(file, CH_BUF_SIZE, 10);
+	int writen_bytes_cnt = write(file, temp, 20);
+	printf("count of writen bytes %d\n", writen_bytes_cnt);
 	close(file);
 	return 0;
 }

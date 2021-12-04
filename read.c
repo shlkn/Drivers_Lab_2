@@ -8,8 +8,8 @@
 int main()
 {
 	int file = open("/dev/lab2", O_RDONLY);
-	char temp[8860];
-	int read_cnt = read(file, temp, 8860);
+	char temp[200];
+	int read_cnt = read(file, temp, 20);
 	printf("count of readen bytes %d\n", read_cnt);
 	printf("%s\n", temp);
 	//for(i = 0; i < 200; i++)

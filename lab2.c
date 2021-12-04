@@ -28,6 +28,7 @@ struct cycle_buffer {
 	wait_queue_head_t queue;
 	ssize_t bytes_avalible;
 };
+
 static int gid_cmp(const void *_a, const void *_b)
 {
 	kgid_t a = *(kgid_t *)_a;
@@ -35,13 +36,15 @@ static int gid_cmp(const void *_a, const void *_b)
 
 	return gid_gt(a, b) - gid_lt(a, b);
 }
+
 int find_sesion(kgid_t group, struct file *fl)
 {
-	int i, res;
+	int i;
 
 	for (i = 0; i < count_of_sessions; i++) {
+		int res;
+
 		res = gid_cmp((void *) &sessions[i]->user_group, (void *) &group);
-		//printk("%d res - ", res);
 		if (fl->f_mode & FMODE_READ) {
 			if (sessions[i]->reader_pid == -1 && res == 0) {
 				sessions[i]->reader_pid = current->pid;
@@ -58,6 +61,7 @@ int find_sesion(kgid_t group, struct file *fl)
 	}
 	return -1;
 }
+
 void add_new_session(struct file *fl, int pid)
 {
 	struct cycle_buffer **temp;
@@ -96,6 +100,7 @@ void add_new_session(struct file *fl, int pid)
 	mutex_init(&sessions[count_of_sessions - 1]->gate);
 	init_waitqueue_head(&sessions[count_of_sessions - 1]->queue);
 }
+
 int readble_count_of_bytes_in_cycle_buffer(struct cycle_buffer *buf)
 {
 	int bytes_count;
@@ -105,6 +110,7 @@ int readble_count_of_bytes_in_cycle_buffer(struct cycle_buffer *buf)
 	bytes_count = buf->buf_size - buf->bytes_avalible;
 	return bytes_count;
 }
+
 void read_from_cycle_buffer(struct cycle_buffer *buf, int count, char *read_data, ssize_t offset)
 {
 	int read_cnt;
@@ -156,29 +162,25 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		pr_alert("mutex interrupt");
 		return -1;
 	}
-	read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sessions[iter]);
 
-	if (read_bytes_avail >= count)
-		read_from_cycle_buffer(sessions[iter], count, read_data, 0);
-	else {
-		int already_read_count = 0;
-
-		while (true) {
-			read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sessions[iter]);
-			if (count - already_read_count > read_bytes_avail) {
-				read_from_cycle_buffer(sessions[iter], read_bytes_avail, read_data, already_read_count);
-				already_read_count += read_bytes_avail;
-			} else {
-				read_from_cycle_buffer(sessions[iter], count - already_read_count, read_data, already_read_count);
-				wake_up(&sessions[iter]->queue);
-				break;
-			}
-
+	int already_read_count = 0;
+	while (true) {
+		read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sessions[iter]);
+		if (count - already_read_count > read_bytes_avail) {
+			read_from_cycle_buffer(sessions[iter], read_bytes_avail, read_data, already_read_count);
+			already_read_count += read_bytes_avail;
+		} else {
+			read_from_cycle_buffer(sessions[iter], count - already_read_count, read_data, already_read_count);
+			already_read_count += count - already_read_count;
 			mutex_unlock(&sessions[iter]->gate);
 			wake_up(&sessions[iter]->queue);
-			if (wait_event_interruptible(sessions[iter]->queue, (readble_count_of_bytes_in_cycle_buffer(sessions[iter]) > 0)) == -ERESTARTSYS)
-				break;
+			break;
 		}
+
+		mutex_unlock(&sessions[iter]->gate);
+		wake_up(&sessions[iter]->queue);
+		if (wait_event_interruptible(sessions[iter]->queue, (readble_count_of_bytes_in_cycle_buffer(sessions[iter]) > 0)) == -ERESTARTSYS)
+			break;
 	}
 
 	if (copy_to_user(buf, read_data, count)) {
@@ -186,7 +188,7 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		return -EFAULT;
 	}
 	kfree(read_data);
-	return count;
+	return already_read_count;
 }
 
 static ssize_t lab2_write(struct file *file, const char __user *buf,
@@ -209,28 +211,26 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 		pr_alert("mutex interrupt");
 		return -1;
 	}
-	if (sessions[iter]->bytes_avalible >= count)
-		write_in_cycle_buffer(sessions[iter], count, data);
-	else {
-		int already_written_count = 0;
 
-		while (true) {
-			if (count - already_written_count > sessions[iter]->bytes_avalible)
-				already_written_count += write_in_cycle_buffer(sessions[iter], sessions[iter]->bytes_avalible, (data + already_written_count));
-			else {
-				write_in_cycle_buffer(sessions[iter], count - already_written_count, (data + already_written_count));
-				wake_up(&sessions[iter]->queue);
-				break;
-			}
-
+	int already_written_count = 0;
+	while (true) {
+		if (count - already_written_count > sessions[iter]->bytes_avalible)
+			already_written_count += write_in_cycle_buffer(sessions[iter], sessions[iter]->bytes_avalible, (data + already_written_count));
+		else {
+			already_written_count += write_in_cycle_buffer(sessions[iter], count - already_written_count, (data + already_written_count));
 			mutex_unlock(&sessions[iter]->gate);
 			wake_up(&sessions[iter]->queue);
-			if (wait_event_interruptible(sessions[iter]->queue, (sessions[iter]->bytes_avalible > 0)) == -ERESTARTSYS)
-				break;
+			break;
 		}
+
+		mutex_unlock(&sessions[iter]->gate);
+		wake_up(&sessions[iter]->queue);
+		if (wait_event_interruptible(sessions[iter]->queue, (sessions[iter]->bytes_avalible > 0)) == -ERESTARTSYS)
+			break;
 	}
+
 	kfree(data);
-	return count;
+	return already_written_count;
 }
 
 int lab2_open(struct inode *in, struct file *fl)
@@ -250,7 +250,25 @@ int lab2_open(struct inode *in, struct file *fl)
 
 int lab2_release(struct inode *in, struct file *fl)
 {
-	pr_alert("file closed\n");
+	int i;
+
+	for (i = 0; i < count_of_sessions; i++) {
+		printk("i - %d\n", i);
+		printk("sessions[i]->writer_pid - %d\n", sessions[i]->writer_pid);
+		printk("sessions[i]->reader_pid - %d\n", sessions[i]->reader_pid);
+		printk("sessions[i]->user_group - %d\n", sessions[i]->user_group);
+		printk("sessions[i]->bytes_avalible - %d\n", sessions[i]->bytes_avalible);
+		printk("sessions[i]->buf_size - %d\n", sessions[i]->buf_size);
+
+		if (sessions[i]->writer_pid == current->pid) {
+			sessions[i]->writer_pid = -1; // return to n/a
+			pr_alert("process %d closed file", current->pid);
+		}
+		if (sessions[i]->reader_pid == current->pid) {
+			sessions[i]->reader_pid = -1; // return to n/a
+			pr_alert("process %d closed file", current->pid);
+		}
+	}
 	return 0;
 }
 
@@ -285,6 +303,8 @@ static long lab2_ioctl_handler(struct file *fl, unsigned int cmd, unsigned long 
 						return -EINVAL;
 					}
 					sessions[i]->buffer = temp;
+					sessions[i]->buf_size = arg;
+					sessions[i]->bytes_avalible = arg;
 					mutex_unlock(&sessions[i]->gate);
 				}
 			}
@@ -324,6 +344,15 @@ static int __init modinit(void)
 
 static void __exit modexit(void)
 {
+	int i;
+
+	for (i = 0; i < count_of_sessions; i++) {
+		mutex_unlock(&sessions[i]->gate);
+		wake_up(&sessions[i]->queue);
+		kfree(sessions[i]->buffer);
+		kfree(sessions[i]);
+	}
+	kfree(sessions);
 	unregister_chrdev(major, "register_chrdev");
 	pr_alert("bye");
 }
