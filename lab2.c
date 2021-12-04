@@ -8,25 +8,100 @@
 #include <linux/wait.h>
 #define BUFFER_SIZE 5
 
-DECLARE_WAIT_QUEUE_HEAD(module_queue);
-DEFINE_MUTEX(mutex);
-struct cycle_buffer test_buffer;
 static int major;
 
+struct cycle_buffer **sesions;
+int count_of_sesions;
+
 struct cycle_buffer {
-	char buffer[BUFFER_SIZE];
+	kgid_t  user_group; 
+	int writer_pid; // -1 - n/a
+	int reader_pid; // -1 - n/a
+	char *buffer;
 	int buf_size;
 	int read_ptr;
 	int write_ptr;
+	struct mutex gate;
+	wait_queue_head_t queue;
 	ssize_t bytes_avalible;
 };
-int readble_count_of_bytes_in_cycle_buffer(struct cycle_buffer buf)
+static int gid_cmp(const void *_a, const void *_b)
+{
+	kgid_t a = *(kgid_t *)_a;
+	kgid_t b = *(kgid_t *)_b;
+
+	return gid_gt(a, b) - gid_lt(a, b);
+}
+int find_sesion(kgid_t group, struct file *fl)
+{
+	int i, res;
+
+	for (i = 0; i < count_of_sesions; i++)
+	{
+		res = gid_cmp((void *) &sesions[i]->user_group, (void *) &group);
+		//printk("%d res - ", res);
+		if(fl->f_mode & FMODE_READ) {
+			if(sesions[i]->reader_pid == -1 && res == 0) {
+				sesions[i]->reader_pid = current->pid;
+				return i;
+			}
+		}else if(fl->f_mode & FMODE_WRITE) {
+			if(sesions[i]->writer_pid == -1 && res == 0) {
+				sesions[i]->writer_pid = current->pid;
+				return i;
+			}
+		} else {
+			return -2;
+		}
+	}
+	return -1;
+}
+void add_new_session(struct file *fl, int pid)
+{
+	struct cycle_buffer **temp;
+
+	count_of_sesions++;
+	temp = krealloc(sesions, count_of_sesions * sizeof(struct cycle_buffer *), GFP_KERNEL);
+	if(temp == NULL) {
+		pr_alert("Can`t allocate memory");
+	}
+
+	temp[count_of_sesions - 1] = krealloc((sesions + count_of_sesions - 1), sizeof(struct cycle_buffer), GFP_KERNEL);
+	if(temp[count_of_sesions - 1] == NULL) {
+		pr_alert("Can`t allocate memory");
+	}
+	temp[count_of_sesions - 1]->buffer = krealloc(temp[count_of_sesions - 1]->buffer, BUFFER_SIZE, GFP_KERNEL);
+	if(temp[count_of_sesions - 1]->buffer == NULL) {
+		pr_alert("Can`t allocate memory");
+	}
+
+	sesions = temp;
+
+
+	//init mem
+	sesions[count_of_sesions - 1]->user_group = fl->f_cred->group_info->gid[0];
+	if(fl->f_mode & FMODE_WRITE) {
+		sesions[count_of_sesions - 1]->writer_pid = pid;
+		sesions[count_of_sesions - 1]->reader_pid = -1;
+	}
+	if(fl->f_mode & FMODE_READ) {
+		sesions[count_of_sesions - 1]->reader_pid = pid;
+		sesions[count_of_sesions - 1]->writer_pid = -1;
+	}
+	sesions[count_of_sesions - 1]->buf_size = BUFFER_SIZE;
+	sesions[count_of_sesions - 1]->read_ptr = 0;
+	sesions[count_of_sesions - 1]->write_ptr = 0;
+	sesions[count_of_sesions - 1]->bytes_avalible = BUFFER_SIZE;
+	mutex_init(&sesions[count_of_sesions - 1]->gate);
+	init_waitqueue_head(&sesions[count_of_sesions - 1]->queue);
+}
+int readble_count_of_bytes_in_cycle_buffer(struct cycle_buffer *buf)
 {
 	int bytes_count;
 
-	if (buf.bytes_avalible == buf.buf_size)
+	if (buf->bytes_avalible == buf->buf_size)
 		return 0;
-	bytes_count = buf.buf_size - buf.bytes_avalible;
+	bytes_count = buf->buf_size - buf->bytes_avalible;
 	return bytes_count;
 }
 void read_from_cycle_buffer(struct cycle_buffer *buf, int count, char *read_data, ssize_t offset)
@@ -67,33 +142,38 @@ int write_in_cycle_buffer(struct cycle_buffer *buf, int count, char *data)
 static ssize_t lab2_read(struct file *file, char __user *buf,
 			 size_t count, loff_t *pos)
 {
-	int read_bytes_avail = 0;
+	int read_bytes_avail = 0, iter = 0;
 	char *read_data;
 
 	read_data = kzalloc(count + 1, GFP_KERNEL);
-	mutex_lock(&mutex);
-	read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(test_buffer);
-	if (read_bytes_avail == 0)
-		return 0;
+	for(iter = 0; iter < count_of_sesions; iter++) { //finds sesion
+		if(sesions[iter]->reader_pid == current->pid)
+			break;
+	}
+
+	//mutex_lock(&mutex);
+	read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sesions[iter]);
+	// if (read_bytes_avail == 0)
+	// 	return 0;
 	if (read_bytes_avail >= count)
-		read_from_cycle_buffer(&test_buffer, count, read_data, 0);
+		read_from_cycle_buffer(sesions[iter], count, read_data, 0);
 	else {
 		int already_read_count = 0;
 
 		while (true) {
-			read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(test_buffer);
+			read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sesions[iter]);
 			if (count - already_read_count > read_bytes_avail) {
-				read_from_cycle_buffer(&test_buffer, read_bytes_avail, read_data, already_read_count);
+				read_from_cycle_buffer(sesions[iter], read_bytes_avail, read_data, already_read_count);
 				already_read_count += read_bytes_avail;
 			} else {
-				read_from_cycle_buffer(&test_buffer, count - already_read_count, read_data, already_read_count);
-				wake_up(&module_queue);
+				read_from_cycle_buffer(sesions[iter], count - already_read_count, read_data, already_read_count);
+				wake_up(&sesions[iter]->queue);
 				break;
 			}
 
-			mutex_unlock(&mutex);
-			wake_up(&module_queue);
-			if (wait_event_interruptible_exclusive(module_queue, (readble_count_of_bytes_in_cycle_buffer(test_buffer) > 0)) == -ERESTARTSYS)
+			mutex_unlock(&sesions[iter]->gate);
+			wake_up(&sesions[iter]->queue);
+			if (wait_event_interruptible_exclusive(sesions[iter]->queue, (readble_count_of_bytes_in_cycle_buffer(sesions[iter]) > 0)) == -ERESTARTSYS)
 				break;
 		}
 	}
@@ -110,30 +190,37 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 			 size_t count, loff_t *pos)
 {
 	char *data;
+	int iter = 0;
 
 	data = kzalloc(count, GFP_KERNEL);
 	if (copy_from_user(data, buf, count)) {
 		pr_alert("copy_from_user error");
 		return -EFAULT;
 	}
-	mutex_lock(&mutex);
-	if (test_buffer.bytes_avalible >= count)
-		write_in_cycle_buffer(&test_buffer, count, data);
+
+	for(iter = 0; iter < count_of_sesions; iter++) { //finds sesion
+		if(sesions[iter]->writer_pid == current->pid)
+			break;
+	}
+
+	//mutex_lock(&mutex);
+	if (sesions[iter]->bytes_avalible >= count)
+		write_in_cycle_buffer(sesions[iter], count, data);
 	else {
 		int already_written_count = 0;
 
 		while (true) {
-			if (count - already_written_count > test_buffer.bytes_avalible)
-				already_written_count += write_in_cycle_buffer(&test_buffer, test_buffer.bytes_avalible, (data + already_written_count));
+			if (count - already_written_count > sesions[iter]->bytes_avalible)
+				already_written_count += write_in_cycle_buffer(sesions[iter], sesions[iter]->bytes_avalible, (data + already_written_count));
 			else {
-				write_in_cycle_buffer(&test_buffer, count - already_written_count, (data + already_written_count));
-				wake_up(&module_queue);
+				write_in_cycle_buffer(sesions[iter], count - already_written_count, (data + already_written_count));
+				wake_up(&sesions[iter]->queue);
 				break;
 			}
 
-			mutex_unlock(&mutex);
-			wake_up(&module_queue);
-			if (wait_event_interruptible_exclusive(module_queue, (test_buffer.bytes_avalible > 0)) == -ERESTARTSYS)
+			mutex_unlock(&sesions[iter]->gate);
+			wake_up(&sesions[iter]->queue);
+			if (wait_event_interruptible_exclusive(sesions[iter]->queue, (sesions[iter]->bytes_avalible > 0)) == -ERESTARTSYS)
 				break;
 		}
 	}
@@ -143,6 +230,19 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 
 int lab2_open(struct inode *in, struct file *fl)
 {
+	int sesionID;
+
+	if(fl->f_cred->group_info->ngroups != 1)
+		pr_alert("too many groups. first will be used\n");
+
+
+	sesionID = find_sesion(fl->f_cred->group_info->gid[0], fl);
+	if(sesionID == -1) {
+		add_new_session(fl, current->pid);
+		// pr_alert("%d", sesions[count_of_sesions - 1]->user_group);
+		// pr_alert("%d", sesions[count_of_sesions - 1]->writer_pid);
+	}
+	pr_alert("%d", sesionID);
 	pr_alert("file opened\n");
 	return 0;
 }
@@ -163,12 +263,8 @@ static const struct file_operations fops = {
 
 static int __init modinit(void)
 {
-	/* 0 is ? */
-	//init
-	test_buffer.buf_size = BUFFER_SIZE;
-	test_buffer.bytes_avalible = test_buffer.buf_size;
-	test_buffer.write_ptr = 0;
-	test_buffer.read_ptr = 0;
+	count_of_sesions = 0;
+	sesions = NULL;
 
 	major = register_chrdev(0, "Lab2", &fops);
 	if (major < 0) {
