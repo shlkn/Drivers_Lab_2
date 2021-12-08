@@ -44,7 +44,9 @@ int find_sesion(kgid_t group, struct file *fl)
 	for (i = 0; i < count_of_sessions; i++) {
 		int res;
 
+		pr_alert("cyc");
 		res = gid_cmp((void *) &sessions[i]->user_group, (void *) &group);
+		pr_alert("cyc");
 		if (fl->f_mode & FMODE_READ) {
 			if (sessions[i]->reader_pid == -1 && res == 0) {
 				sessions[i]->reader_pid = current->pid;
@@ -71,16 +73,22 @@ void add_new_session(struct file *fl, int pid)
 	temp = krealloc(sessions, count_of_sessions * sizeof(struct cycle_buffer *), GFP_KERNEL);
 	if (temp == NULL)
 		pr_alert("Can`t allocate memory");
+	pr_alert("new ses 1");
 
 	temp[count_of_sessions - 1] = krealloc((sessions + count_of_sessions - 1), sizeof(struct cycle_buffer), GFP_KERNEL);
 	if (temp[count_of_sessions - 1] == NULL)
 		pr_alert("Can`t allocate memory");
+	temp[count_of_sessions - 1]->buffer = NULL;
+	pr_alert("new ses 2");
+
 
 	tempbuff = krealloc(temp[count_of_sessions - 1]->buffer, BUFFER_SIZE, GFP_KERNEL);
 	if (tempbuff == NULL)
 		pr_alert("Can`t allocate memory");
 	temp[count_of_sessions - 1]->buffer = tempbuff;
 	sessions = temp;
+	pr_alert("new ses 3");
+
 
 
 	//init mem
@@ -149,7 +157,7 @@ int write_in_cycle_buffer(struct cycle_buffer *buf, int count, char *data)
 static ssize_t lab2_read(struct file *file, char __user *buf,
 			 size_t count, loff_t *pos)
 {
-	int read_bytes_avail = 0, iter = 0;
+	int read_bytes_avail = 0, iter = 0, already_read_count = 0;
 	char *read_data;
 
 	read_data = kzalloc(count + 1, GFP_KERNEL);
@@ -163,7 +171,6 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 		return -1;
 	}
 
-	int already_read_count = 0;
 	while (true) {
 		read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sessions[iter]);
 		if (count - already_read_count > read_bytes_avail) {
@@ -195,7 +202,7 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 			 size_t count, loff_t *pos)
 {
 	char *data;
-	int iter = 0;
+	int iter = 0, already_written_count = 0;
 
 	data = kzalloc(count, GFP_KERNEL);
 	if (copy_from_user(data, buf, count)) {
@@ -212,7 +219,6 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 		return -1;
 	}
 
-	int already_written_count = 0;
 	while (true) {
 		if (count - already_written_count > sessions[iter]->bytes_avalible)
 			already_written_count += write_in_cycle_buffer(sessions[iter], sessions[iter]->bytes_avalible, (data + already_written_count));
@@ -240,8 +246,11 @@ int lab2_open(struct inode *in, struct file *fl)
 	if (fl->f_cred->group_info->ngroups != 1)
 		pr_alert("too many groups. first will be used\n");
 
+	pr_alert("count of sessions in open %d - ", count_of_sessions);
 
+	pr_alert("tyt");
 	sesionID = find_sesion(fl->f_cred->group_info->gid[0], fl);
+	pr_alert("sesionID - %d", sesionID);
 	if (sesionID == -1)
 		add_new_session(fl, current->pid);
 	pr_alert("file opened\n");
@@ -251,14 +260,9 @@ int lab2_open(struct inode *in, struct file *fl)
 int lab2_release(struct inode *in, struct file *fl)
 {
 	int i;
+	struct cycle_buffer **temp;
 
 	for (i = 0; i < count_of_sessions; i++) {
-		printk("i - %d\n", i);
-		printk("sessions[i]->writer_pid - %d\n", sessions[i]->writer_pid);
-		printk("sessions[i]->reader_pid - %d\n", sessions[i]->reader_pid);
-		printk("sessions[i]->user_group - %d\n", sessions[i]->user_group);
-		printk("sessions[i]->bytes_avalible - %d\n", sessions[i]->bytes_avalible);
-		printk("sessions[i]->buf_size - %d\n", sessions[i]->buf_size);
 
 		if (sessions[i]->writer_pid == current->pid) {
 			sessions[i]->writer_pid = -1; // return to n/a
@@ -268,6 +272,51 @@ int lab2_release(struct inode *in, struct file *fl)
 			sessions[i]->reader_pid = -1; // return to n/a
 			pr_alert("process %d closed file", current->pid);
 		}
+		if (sessions[i]->writer_pid == -1 && sessions[i]->reader_pid == -1) { //delete mem
+			int iter, new_iter = 0;
+
+			if (count_of_sessions == 1) {
+				kfree(sessions[i]->buffer);
+				kfree(sessions[i]);
+				kfree(sessions);
+				sessions = NULL;
+				count_of_sessions--;
+				return 0;
+			}
+			pr_alert(" count_of_sessions - %d", count_of_sessions);
+			temp = kmalloc((count_of_sessions - 1) * sizeof(struct cycle_buffer *), GFP_KERNEL);
+			if (temp == NULL) {
+				pr_alert("Bad mem alloc\n");
+				return 0;
+			}
+			for (iter = 0; iter < count_of_sessions; iter++) {
+				pr_alert(" iter - %d", iter);
+				pr_alert(" i - %d", i);
+				if (i == iter) { // delete sesion
+					pr_alert("delete session\n");
+					kfree(sessions[iter]->buffer);
+					kfree(sessions[iter]);
+				}
+				else {
+					pr_alert("%d = %d\n", new_iter, iter);
+					temp[new_iter] = sessions[iter]; // copy to new array;
+					new_iter++;
+				}
+			}
+			count_of_sessions--;
+			kfree(sessions);
+			sessions = temp;
+			pr_alert("count of sessions reduced. New sessions count - %d\n", count_of_sessions);
+		}
+	}
+	pr_alert("sessions count - %d\n", count_of_sessions);
+	for (i = 0; i < count_of_sessions; i++) {
+		printk("i - %d\n", i);
+		printk("sessions[i]->writer_pid - %d\n", sessions[i]->writer_pid);
+		printk("sessions[i]->reader_pid - %d\n", sessions[i]->reader_pid);
+		printk("sessions[i]->user_group - %d\n", sessions[i]->user_group);
+		printk("sessions[i]->bytes_avalible - %d\n", sessions[i]->bytes_avalible);
+		printk("sessions[i]->buf_size - %d\n", sessions[i]->buf_size);
 	}
 	return 0;
 }

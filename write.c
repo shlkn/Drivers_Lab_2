@@ -11,8 +11,6 @@ int main()
 {
 	int file = open("/dev/lab2", O_WRONLY);
 	char *temp = "Hello from userspace";
-	//for(int i = 0; i < 20; i++)
-		//printf("%X\n", temp[i]);
 	printf("%s\n", temp);
 	//ioctl(file, CH_BUF_SIZE, 10);
 	int writen_bytes_cnt = write(file, temp, 20);
