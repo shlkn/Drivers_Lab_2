@@ -27,4 +27,5 @@ reload:
 us:
 	gcc write.c -o write
 	gcc read.c -o read
-
+	gcc ReadAll.c -o readall
+	

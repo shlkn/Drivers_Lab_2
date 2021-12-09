@@ -28,6 +28,7 @@ struct cycle_buffer {
 	struct mutex gate;
 	wait_queue_head_t queue;
 	ssize_t bytes_avalible;
+	size_t expected_write_cnt;
 };
 
 static int gid_cmp(const void *_a, const void *_b)
@@ -54,6 +55,7 @@ int find_sesion(kgid_t group, struct file *fl)
 		} else if (fl->f_mode & FMODE_WRITE) {
 			if (sessions[i]->writer_pid == -1 && res == 0) {
 				sessions[i]->writer_pid = current->pid;
+				//fl->private_data = (void *) sessions[i];
 				return i;
 			}
 		} else {
@@ -104,6 +106,7 @@ void add_new_session(struct file *fl, int pid)
 	sessions[count_of_sessions - 1]->read_ptr = 0;
 	sessions[count_of_sessions - 1]->write_ptr = 0;
 	sessions[count_of_sessions - 1]->bytes_avalible = sessions[count_of_sessions - 1]->buf_size;
+	sessions[count_of_sessions - 1]->expected_write_cnt = 0;
 	mutex_init(&sessions[count_of_sessions - 1]->gate);
 	init_waitqueue_head(&sessions[count_of_sessions - 1]->queue);
 }
@@ -220,6 +223,7 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 	for (iter = 0; iter < count_of_sessions; iter++) { //finds sesion
 		if (sessions[iter]->writer_pid == current->pid) {
 			crt_session = sessions[iter];
+			crt_session->expected_write_cnt = count;
 			break;
 		}
 	}
@@ -348,6 +352,16 @@ static long lab2_ioctl_handler(struct file *fl, unsigned int cmd, unsigned long 
 					sessions[i]->bytes_avalible = arg;
 					mutex_unlock(&sessions[i]->gate);
 				}
+			}
+			break;
+		}
+		case GET_WRITE_CNT: {
+			int i = 0;
+
+			for (i = 0; i < count_of_sessions; i++) {
+				if (sessions[i]->writer_pid == current->pid || sessions[i]->reader_pid == current->pid)
+					if (sessions[i]->expected_write_cnt != 0)
+						return (int) sessions[i]->expected_write_cnt;
 			}
 			break;
 		}
