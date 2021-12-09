@@ -1,0 +1,3 @@
+#define MAGIC_NUMBER 0x16
+#define CH_BUF_SIZE _IOW(MAGIC_NUMBER, 1, int)
+#define GET_WRITE_CNT _IOW(MAGIC_NUMBER, 2, int)
