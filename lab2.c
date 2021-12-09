@@ -104,7 +104,7 @@ void add_new_session(struct file *fl, int pid)
 	sessions[count_of_sessions - 1]->buf_size = BUFFER_SIZE;
 	sessions[count_of_sessions - 1]->read_ptr = 0;
 	sessions[count_of_sessions - 1]->write_ptr = 0;
-	sessions[count_of_sessions - 1]->bytes_avalible = BUFFER_SIZE;
+	sessions[count_of_sessions - 1]->bytes_avalible = sessions[count_of_sessions - 1]->buf_size;
 	mutex_init(&sessions[count_of_sessions - 1]->gate);
 	init_waitqueue_head(&sessions[count_of_sessions - 1]->queue);
 }
@@ -157,36 +157,56 @@ int write_in_cycle_buffer(struct cycle_buffer *buf, int count, char *data)
 static ssize_t lab2_read(struct file *file, char __user *buf,
 			 size_t count, loff_t *pos)
 {
-	int read_bytes_avail = 0, iter = 0, already_read_count = 0;
+	pr_alert("in read func\n");
+	int read_bytes_avail = 0, iter = 0, i, already_read_count = 0;
+	struct cycle_buffer *crt_session = NULL;
 	char *read_data;
 
 	read_data = kzalloc(count + 1, GFP_KERNEL);
+	pr_alert("memory alloc\n");
 	for (iter = 0; iter < count_of_sessions; iter++) { //finds sesion
-		if (sessions[iter]->reader_pid == current->pid)
+		pr_alert("iter - %d\n", iter);
+		pr_alert("res - %d\n", (sessions[iter]->reader_pid == current->pid));
+		if (sessions[iter]->reader_pid == current->pid) {
+			crt_session = sessions[iter];
 			break;
+		}
 	}
-
-	if (mutex_lock_interruptible(&sessions[iter]->gate)) {
+	pr_alert("iter finish - %d\n", iter);
+	pr_alert("current->pid - %d\n", current->pid);
+	if (mutex_lock_interruptible(&crt_session->gate)) {
 		pr_alert("mutex interrupt");
 		return -1;
 	}
 
+	for (i = 0; i < count_of_sessions; i++) {
+		printk("i - %d\n", i);
+		printk("sessions[i]->writer_pid - %d\n", crt_session->writer_pid);
+		printk("sessions[i]->reader_pid - %d\n", crt_session->reader_pid);
+		printk("sessions[i]->user_group - %d\n", crt_session->user_group);
+		printk("sessions[i]->bytes_avalible - %d\n", crt_session->bytes_avalible);
+		printk("sessions[i]->buf_size - %d\n", crt_session->buf_size);
+		pr_alert("file opened\n");
+	}
+
+
 	while (true) {
-		read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(sessions[iter]);
+		pr_alert("cycle");
+		read_bytes_avail = readble_count_of_bytes_in_cycle_buffer(crt_session);
 		if (count - already_read_count > read_bytes_avail) {
-			read_from_cycle_buffer(sessions[iter], read_bytes_avail, read_data, already_read_count);
+			read_from_cycle_buffer(crt_session, read_bytes_avail, read_data, already_read_count);
 			already_read_count += read_bytes_avail;
 		} else {
-			read_from_cycle_buffer(sessions[iter], count - already_read_count, read_data, already_read_count);
+			read_from_cycle_buffer(crt_session, count - already_read_count, read_data, already_read_count);
 			already_read_count += count - already_read_count;
-			mutex_unlock(&sessions[iter]->gate);
-			wake_up(&sessions[iter]->queue);
+			mutex_unlock(&crt_session->gate);
+			wake_up(&crt_session->queue);
 			break;
 		}
 
-		mutex_unlock(&sessions[iter]->gate);
-		wake_up(&sessions[iter]->queue);
-		if (wait_event_interruptible(sessions[iter]->queue, (readble_count_of_bytes_in_cycle_buffer(sessions[iter]) > 0)) == -ERESTARTSYS)
+		mutex_unlock(&crt_session->gate);
+		wake_up(&crt_session->queue);
+		if (wait_event_interruptible(crt_session->queue, (readble_count_of_bytes_in_cycle_buffer(crt_session) > 0)) == -ERESTARTSYS)
 			break;
 	}
 
@@ -201,6 +221,10 @@ static ssize_t lab2_read(struct file *file, char __user *buf,
 static ssize_t lab2_write(struct file *file, const char __user *buf,
 			 size_t count, loff_t *pos)
 {
+	int i;
+	struct cycle_buffer *crt_session = NULL;
+
+	pr_alert("in write func\n");
 	char *data;
 	int iter = 0, already_written_count = 0;
 
@@ -210,28 +234,47 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 		return -EFAULT;
 	}
 
-	for (iter = 0; iter < count_of_sessions; iter++) //finds sesion
-		if (sessions[iter]->writer_pid == current->pid)
+	for (iter = 0; iter < count_of_sessions; iter++) { //finds sesion
+		pr_alert("iter - %d\n", iter);
+		pr_alert("res - %d\n", (sessions[iter]->writer_pid == current->pid));
+		if (sessions[iter]->writer_pid == current->pid) {
+			crt_session = sessions[iter];
 			break;
+		}
+	}
 
-	if (mutex_lock_interruptible(&sessions[iter]->gate)) {
+
+	if (mutex_lock_interruptible(&crt_session->gate)) {
 		pr_alert("mutex interrupt");
 		return -1;
 	}
+	pr_alert("iter finish - %d\n", iter);
+	pr_alert("current->pid - %d\n", current->pid);
+
+	for (i = 0; i < count_of_sessions; i++) {
+		printk("i - %d\n", i);
+		printk("sessions[i]->writer_pid - %d\n", crt_session->writer_pid);
+		printk("sessions[i]->reader_pid - %d\n", crt_session->reader_pid);
+		printk("sessions[i]->user_group - %d\n", crt_session->user_group);
+		printk("sessions[i]->bytes_avalible - %d\n", crt_session->bytes_avalible);
+		printk("sessions[i]->buf_size - %d\n", crt_session->buf_size);
+		pr_alert("file opened\n");
+	}
+
 
 	while (true) {
-		if (count - already_written_count > sessions[iter]->bytes_avalible)
-			already_written_count += write_in_cycle_buffer(sessions[iter], sessions[iter]->bytes_avalible, (data + already_written_count));
+		if (count - already_written_count > crt_session->bytes_avalible)
+			already_written_count += write_in_cycle_buffer(crt_session, crt_session->bytes_avalible, (data + already_written_count));
 		else {
-			already_written_count += write_in_cycle_buffer(sessions[iter], count - already_written_count, (data + already_written_count));
-			mutex_unlock(&sessions[iter]->gate);
-			wake_up(&sessions[iter]->queue);
+			already_written_count += write_in_cycle_buffer(crt_session, count - already_written_count, (data + already_written_count));
+			mutex_unlock(&crt_session->gate);
+			wake_up(&crt_session->queue);
 			break;
 		}
 
-		mutex_unlock(&sessions[iter]->gate);
-		wake_up(&sessions[iter]->queue);
-		if (wait_event_interruptible(sessions[iter]->queue, (sessions[iter]->bytes_avalible > 0)) == -ERESTARTSYS)
+		mutex_unlock(&crt_session->gate);
+		wake_up(&crt_session->queue);
+		if (wait_event_interruptible(crt_session->queue, (crt_session->bytes_avalible > 0)) == -ERESTARTSYS)
 			break;
 	}
 
@@ -241,7 +284,7 @@ static ssize_t lab2_write(struct file *file, const char __user *buf,
 
 int lab2_open(struct inode *in, struct file *fl)
 {
-	int sesionID;
+	int sesionID, i, j;
 
 	if (fl->f_cred->group_info->ngroups != 1)
 		pr_alert("too many groups. first will be used\n");
@@ -253,7 +296,18 @@ int lab2_open(struct inode *in, struct file *fl)
 	pr_alert("sesionID - %d", sesionID);
 	if (sesionID == -1)
 		add_new_session(fl, current->pid);
-	pr_alert("file opened\n");
+
+	for (i = 0; i < count_of_sessions; i++) {
+		printk("i - %d\n", i);
+		printk("sessions[i]->writer_pid - %d\n", sessions[i]->writer_pid);
+		printk("sessions[i]->reader_pid - %d\n", sessions[i]->reader_pid);
+		printk("sessions[i]->user_group - %d\n", sessions[i]->user_group);
+		printk("sessions[i]->bytes_avalible - %d\n", sessions[i]->bytes_avalible);
+		printk("sessions[i]->buf_size - %d\n", sessions[i]->buf_size);
+		for(j = 0; j < sessions[i]->buf_size; j++)
+			printk("sessions[i]->buf_size - %c\n", sessions[i]->buffer[j]);
+		pr_alert("file opened\n");
+	}
 	return 0;
 }
 
